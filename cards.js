@@ -2,8 +2,8 @@ import { randomInt } from 'node:crypto';
 const make = (deck, list) => list.map(([text, effect], i) => ({ id: `${deck}-${i+1}`, deck, text, effect }));
 export const CHANCE_CARDS = make('chance', [
   ['Idź na START. Pobierz 200€.', {type:'move',to:0}],
-  ['Idź na Rzym. Po drodze pobierz 200€ za START.', {type:'move',to:34}],
-  ['Idź na Sztokholm. Po drodze pobierz 200€ za START.', {type:'move',to:24}],
+  ['Leć do Tokio. Po drodze pobierz 200€ za START.', {type:'move',to:34}],
+  ['Leć do Dubaju. Po drodze pobierz 200€ za START.', {type:'move',to:24}],
   ['Idź na najbliższe medium. Za cudze, niezastawione medium zapłać 10 × sumę nowego rzutu.', {type:'nearest',kind:'utility'}],
   ['Idź na najbliższy dworzec. Zapłać podwójny czynsz, jeśli jest cudzy.', {type:'nearest',kind:'station'}],
   ['Idź na najbliższy dworzec. Zapłać podwójny czynsz, jeśli jest cudzy.', {type:'nearest',kind:'station'}],
@@ -13,8 +13,8 @@ export const CHANCE_CARDS = make('chance', [
   ['Idź prosto do więzienia. Nie pobierasz 200€ za START.', {type:'jail'}],
   ['Generalny remont: zapłać 25€ za każdy dom i 100€ za każdy hotel.', {type:'repairs',house:25,hotel:100}],
   ['Zapłać grzywnę 15€.', {type:'pay',amount:15}],
-  ['Idź na Berlin Hbf. Po drodze pobierz 200€ za START.', {type:'move',to:5}],
-  ['Idź na Londyn.', {type:'move',to:39}],
+  ['Idź na Atlantic Express. Po drodze pobierz 200€ za START.', {type:'move',to:5}],
+  ['Leć do Nowego Jorku.', {type:'move',to:39}],
   ['Zostałeś przewodniczącym rady. Zapłać każdemu graczowi 50€.', {type:'payEach',amount:50}],
   ['Twoja pożyczka budowlana dojrzała. Pobierz 150€.', {type:'receive',amount:150}]
 ]);

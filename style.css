@@ -7,3 +7,28 @@
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
 @media(max-width:850px){.game-layout .game-board-area{display:contents}.game-layout .board-shell{order:0}.game-layout .under-board{order:1}.game-layout .sidebar{order:2}.game-layout .log-panel{order:3;margin-top:0}}
+
+/* World Tour: engraved landmarks, ocean board, collectible metal pieces. */
+:root{--bg:#101f2c;--panel:#172e3b;--panel2:#1d3a47;--paper:#f5efdf;--ink:#203d47;--gold:#f0cd87;--line:#a7c8cc26}
+body{background:radial-gradient(ellipse at 78% 20%,#23566a70,transparent 55%),radial-gradient(ellipse at 4% 95%,#bb844b15,transparent 45%),#101f2c}
+.topbar{border-bottom-color:#a4c6d621}.brand-mark{background:linear-gradient(145deg,#f1d69a,#aa803e);color:#173444;border:0;box-shadow:0 3px 0 #654c27}
+.board-shell{padding:12px;background:linear-gradient(135deg,#f3d9a4,#ad834b 45%,#ead1a1);border-radius:18px;box-shadow:0 28px 70px #0007,0 3px 0 #694d2d}
+.board{border-radius:8px;gap:1px;background:#bdc5bf;border-color:#bdc5bf}
+.board-center{background:radial-gradient(ellipse at 50% 30%,#336477,#193f52 60%,#153240);border-color:#d5bd84}
+.board-center:before{border-radius:50%;inset:9%;border-color:#e9d8ac1c}.board-center:after{inset:22px;border-color:#e9d8ac35}
+.map-decoration{width:115%;height:85%;opacity:.14;top:1%;color:#b8dfd7}
+.board-title{font-size:clamp(25px,4.6vw,65px);letter-spacing:1px;text-shadow:0 3px 0 #0e2c3c}
+.compass{font-size:38px;opacity:.9;margin-bottom:18px}.board-subtitle{letter-spacing:4px}
+.tile.city{padding:16% 2px 9%;gap:1px;background:linear-gradient(145deg,#fffdf3,#e9e6d8)}
+.tile .stripe{height:12%;border-bottom:0;box-shadow:inset 0 2px 0 #ffffff60}
+.city-landmark{display:block;width:43%;max-height:45%;aspect-ratio:1;color:#345767;flex-shrink:1}
+.city-landmark svg{display:block;width:100%;height:100%}.tile-name{font-weight:650;line-height:1.05}.tile .price{font-size:.8em;font-weight:600;color:#567374;opacity:1}
+.tile.corner{background:linear-gradient(135deg,#dfecdf,#c5dbd4);color:#234e56}.tile .tile-icon{color:#547e86}
+.token,.home-board-wrap .token{width:23px;height:26px;background:linear-gradient(145deg,#fff8d9,#d6c69c 55%,#9c8353);border:1px solid #fff4c5;border-radius:8px;color:var(--piece-color);filter:drop-shadow(0 3px 1px #09252bb0);box-shadow:inset 0 1px 0 #fff,0 2px 0 #776643;overflow:hidden}
+.token:before{display:none}.token svg{width:100%;height:100%;filter:drop-shadow(0 1px 0 #fff)}
+.piece-showcase{display:flex;gap:12px;margin:22px 0 8px}.piece-sample{display:grid;place-items:center;width:45px;height:49px;border-radius:13px;background:linear-gradient(145deg,#35566a,#1c3444);border:1px solid #94bac34a;color:var(--piece-color);box-shadow:0 5px 0 #0a1824, inset 0 1px 0 #b0cbd426;transform:rotate(-5deg)}
+.piece-sample:nth-child(even){transform:rotate(5deg)}.piece-sample svg{width:34px;height:34px;filter:drop-shadow(0 2px 1px #0005)}
+.setup-card{background:linear-gradient(135deg,#243e4e,#172e3b);border-color:#a4c6d633;box-shadow:0 14px 32px #0002}.hero-seal{background:linear-gradient(135deg,#f4ddaa,#d6b470);border:4px double #8c713f}
+.panel{background:#172e3b}.deed-title .city-landmark{width:65px;height:65px;max-height:none;margin:0 auto 8px}
+@media(max-width:1100px){.city-landmark{width:38%}.board-title{font-size:44px}}
+@media(max-width:520px){.board-shell{padding:6px;border-radius:10px}.tile.city{padding-top:15%;padding-bottom:8%;gap:0}.city-landmark{width:42%;max-height:40%}.tile .tile-name{font-size:5.7px}.tile .price{font-size:5px}.board-title,.game-layout .board-title{font-size:29px;letter-spacing:0}.board-subtitle{letter-spacing:2px}.token,.home-board-wrap .token{width:13px;height:16px;border-radius:4px}.piece-showcase{gap:10px}.piece-sample{width:38px;height:40px}.piece-sample svg{width:28px;height:28px}.compass{font-size:27px}.board-center:after{inset:10px}}
