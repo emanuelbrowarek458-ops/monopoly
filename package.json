@@ -1,0 +1,20 @@
+{
+  "name": "europoly",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Europejska gra majątkowa multiplayer, 2–6 graczy",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.1"
+  }
+}

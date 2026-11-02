@@ -1,0 +1,199 @@
+'use strict';
+const $=s=>document.querySelector(s);
+const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money=n=>new Intl.NumberFormat('pl-PL',{maximumFractionDigits:0}).format(n)+' €';
+const socket=io({autoConnect:false});
+let config,room=null,screen='',joinOpen=false,tab='log',selectedField=null,tradeDraft=null;
+let lastDice=0,lastCard=null,lastMovement=null,offset=0,muted=localStorage.getItem('europoly-muted')!=='false',audioContext;
+let stored=null;try{stored=JSON.parse(localStorage.getItem('europoly-session')||'null');}catch{}
+const tokenPositions=new Map(),animationTimers=new Map();
+const me=()=>room?.game?.players.find(p=>p.id===room.you);
+const player=id=>room?.game?.players.find(p=>p.id===id)||room?.members.find(p=>p.id===id);
+const status=()=>room?.game;
+const field=id=>config.board[id];
+const property=id=>status()?.properties[id];
+const group=id=>config.groups[field(id).group]?.ids||[id];
+const full=p=>id=>group(id).every(i=>property(i).ownerId===p.id&&!property(i).mortgaged);
+const button=(label,action,data={},reason='',className='')=>`<button class="${className}" data-action="${action}" ${Object.entries(data).map(([k,v])=>`data-${k}="${esc(v)}"`).join(' ')} ${reason?`disabled title="${esc(reason)}"`:''}>${label}</button>`;
+function toast(text,error=false){const el=document.createElement('div');el.className='toast'+(error?' error':'');el.textContent=text;$('#toasts').append(el);setTimeout(()=>el.remove(),5000);}
+function sound(){if(muted)return;try{audioContext??=new(window.AudioContext||window.webkitAudioContext)();audioContext.resume();const o=audioContext.createOscillator(),g=audioContext.createGain();o.connect(g);g.connect(audioContext.destination);o.frequency.setValueAtTime(500,audioContext.currentTime);o.frequency.exponentialRampToValueAtTime(250,audioContext.currentTime+.12);g.gain.setValueAtTime(.04,audioContext.currentTime);g.gain.exponentialRampToValueAtTime(.001,audioContext.currentTime+.15);o.start();o.stop(audioContext.currentTime+.16);}catch{}}
+function emit(event,payload){return new Promise(resolve=>socket.timeout(7000).emit(event,payload,(err,result)=>{if(err){toast('Brak odpowiedzi serwera. Sprawdź połączenie.',true);resolve(null);}else if(!result?.ok){toast(result?.error||'Nie udało się wykonać akcji.',true);resolve(null);}else resolve(result);}));}
+const act=(type,data={})=>emit('game:action',{type,data});
+const roomAct=(type,data={})=>emit('room:action',{type,data});
+const icons={start:'↗',chest:'▣',chance:'?',tax:'€',station:'▤',utility:'♧',jail:'▥',parking:'P',goToJail:'↪'};
+function grid(id){if(id<=10)return [11,11-id];if(id<=20)return [21-id,1];if(id<=30)return [1,id-19];return [id-29,11];}
+function boardMarkup(preview=false){
+  const tiles=config.board.map(f=>{const [row,col]=grid(f.id),color=config.groups[f.group]?.color;
+    return `<button class="tile ${f.type} ${f.id%10===0?'corner':''}" data-field="${f.id}" style="grid-row:${row};grid-column:${col}" aria-label="${esc(f.name)}${f.price?' — '+f.price+' euro':''}">${color?`<span class="stripe" style="background:${color}"></span>`:''}${icons[f.type]?`<span class="tile-icon">${f.id===12?'ϟ':f.id===28?'◉':icons[f.type]}</span>`:''}<span>${esc(f.name)}</span>${f.price?`<span class="price">${f.price} €</span>`:''}<span class="owner hidden"></span><span class="buildings"></span><span class="mortgage-icon"></span></button>`;
+  }).join('');
+  return `<div class="board-shell"><div class="board">${tiles}<div class="board-center">
+    <svg class="map-decoration" viewBox="0 0 400 400" aria-hidden="true"><path fill="currentColor" d="M180 15l28 22-16 22 15 22-4 33 30-8 10-40 30-28 10 13-20 46-4 35 34 27 40 3 25 24-13 18-39-5-16 18 11 15-11 25-31 4-2 20-18-2 4 28 21 21 3 24-13 5-22-32-16-13-15-37-12-9-20 15-18-6-8 30-23 14-32-8-3-32 18-17 6-31 17-7 6-26 25-8 13-33-18-11 6-29-11-19 14-22-5-29zM85 133l18 9 6 21-8 16 11 13-4 21-22-6-3-21-14-15zM60 168l13 2 3 30-20 9-8-19zM150 12l-26 2-13 14 21 12 23-10zM275 322l19 5 6 19-24 4-15-12z"/></svg>
+    <div class="compass">✧</div><div class="board-title">EURO<span>POLY</span></div><div class="board-subtitle">EUROPA JEST W GRZE</div>
+    ${preview?'<div class="center-rule"></div><div class="center-note">Od pierwszej ulicy<br>do własnego imperium.</div>':'<div class="center-game" id="center-game"></div>'}
+    </div><div class="token-layer" id="tokens"></div></div></div>`;
+}
+function renderHome(){
+  screen='home';$('#app').innerHTML=`<div class="home-layout"><section class="home-copy"><div class="eyebrow">WIECZÓR ZNAJOMYCH. WIELKIE PLANY.</div><h1>Wielkie miasta.<br><em>Twoja wielka gra.</em></h1><p class="intro-text">Zacznij od Sofii. Sięgnij po Londyn. Kupuj miasta, zawieraj sojusze i zbuduj swoje europejskie imperium.</p>
+    <form id="home-form" class="setup-card"><label for="nickname">JAK MAMY CIĘ NAZYWAĆ?</label><input id="nickname" name="nickname" maxlength="16" autocomplete="nickname" placeholder="Twój nick" required value="${esc(localStorage.getItem('europoly-name')||'')}"><div class="setup-actions"><button class="primary" type="submit">Stwórz grę <span>↗</span></button><button type="button" id="join-toggle">Dołącz do gry</button></div><div class="code-input ${joinOpen?'':'hidden'}" id="join-fields"><input id="room-code" maxlength="5" aria-label="Kod pokoju" placeholder="KOD GRY" autocomplete="off"><button id="join-submit" type="button" class="primary">Dołącz</button></div></form>
+    <div class="home-meta"><span><b>♙</b> 2–6 graczy</span><span><b>↗</b> Bez konta</span><span><b>◷</b> W czasie rzeczywistym</span></div></section>
+    <section class="home-board-wrap" aria-label="Podgląd planszy">${boardMarkup(true)}<div class="hero-seal">ZAPROŚ<strong>2–6</strong>GRACZY</div><div class="board-caption"><span>EDYCJA EUROPEJSKA</span><span>TWÓJ NASTĘPNY RUCH?</span></div></section></div>`;
+  previewTokens();
+}
+function previewTokens(){renderToken({id:'preview1',pos:0,color:'#e9c270'},0,0);renderToken({id:'preview2',pos:24,color:'#e98b85'},1,24);renderToken({id:'preview3',pos:6,color:'#85c2e1'},2,6);}
+function chatMarkup(){return `<div class="chat-entries" id="chat-entries"></div><form class="chat-form" id="chat-form"><input name="message" maxlength="300" placeholder="Napisz do znajomych…" aria-label="Wiadomość czatu" autocomplete="off" required><button aria-label="Wyślij wiadomość">↗</button></form>`;}
+function renderLobby(){
+  if(screen!=='lobby') {screen='lobby';$('#app').innerHTML=`<div class="home-layout"><section class="home-copy"><div class="eyebrow">MIEJSCE PRZY STOLE CZEKA</div><h1>W dobrym<br><em>towarzystwie.</em></h1><p class="intro-text">Wyślij znajomym kod pokoju. Gdy wszyscy zajmą miejsca, możecie ruszać w Europę.</p><div id="lobby-info"></div><div class="lobby-chat panel"><div class="panel-label">ROZMOWY PRZY STOLE</div>${chatMarkup()}</div></section><section class="home-board-wrap">${boardMarkup(true)}<div class="board-caption"><span>EDYCJA EUROPEJSKA</span><span>WSZYSTKO ZACZYNA SIĘ OD STARTU</span></div></section></div>`;previewTokens();}
+  $('#lobby-info').innerHTML=`<div class="lobby-code"><div><span class="small">KOD TWOJEGO STOŁU</span><strong>${esc(room.code)}</strong></div>${button('Kopiuj ↗','copy')}</div><div class="panel-label">GRACZE PRZY STOLE <span>${room.members.length}/6</span></div>${room.members.map(m=>`<div class="member-row"><span class="avatar" style="--color:${m.color}">${esc(m.name[0].toUpperCase())}</span><span class="member-name">${esc(m.name)} ${m.id===room.you?'<small class="small">(Ty)</small>':''}${!m.connected?'<small class="small"> · offline</small>':''}</span>${m.id===room.hostId?'<span class="badge">GOSPODARZ</span>':''}${room.you===room.hostId&&m.id!==room.you?button('×','kick',{id:m.id},'','icon-button'):''}</div>`).join('')}
+    <p class="small" style="margin:17px 0 0">TWÓJ KOLOR</p><div class="color-picker">${config.colors.map(color=>`<button class="swatch ${room.members.find(m=>m.id===room.you)?.color===color?'chosen':''}" data-action="color" data-color="${color}" style="--color:${color}" aria-label="Kolor ${color}" ${room.members.some(m=>m.id!==room.you&&m.color===color)?'disabled title="Kolor zajęty"':''}></button>`).join('')}</div>
+    ${button('Rozpocznij podróż →','start',{},room.you!==room.hostId?'Grę rozpoczyna gospodarz.':room.members.length<2?'Zaproś co najmniej jednego gracza.':room.members.some(m=>!m.connected)?'Poczekaj na graczy lub usuń nieobecnych.':'','primary wide')}<p class="small" style="margin-top:9px">${room.you===room.hostId?'Ty decydujesz, kiedy zaczynacie.':'Czekamy, aż gospodarz rozpocznie grę.'}</p>`;
+  renderChat();
+}
+function renderGame(){
+  if(screen!=='game'){screen='game';$('#app').innerHTML=`<div class="room-heading"><div><div class="eyebrow">TWÓJ STÓŁ · <span id="room-number"></span></div><h2 style="margin-top:10px">Europa jest w grze.</h2></div><div>${button('Kopiuj kod ↗','copy',{},'','text-button')}<div class="room-code-small" id="turn-count"></div></div></div><div id="offline-notices"></div><div class="game-layout"><section class="game-board-area">${boardMarkup()}<div class="under-board"><span>Kliknij miasto, aby zobaczyć kartę własności.</span><span>♙ <span id="alive-count"></span> przy stole</span></div><div class="panel log-panel"><div class="tabs"><button data-tab="log" class="active">Dziennik podróży</button><button data-tab="chat">Rozmowy przy stole</button></div><div id="log-view"><div class="log-entries" id="log-entries"></div></div><div id="chat-view" class="hidden">${chatMarkup()}</div></div></section><aside class="sidebar"><div id="actions-panel" class="panel"></div><div class="panel" id="players-panel"></div><div class="panel" id="portfolio-panel"></div><div id="offers-panel"></div></aside></div>`;tokenPositions.clear();}
+  const g=status(),p=me();$('#room-number').textContent=room.code;$('#turn-count').textContent=`TURA ${g.turnNumber||'—'} · KOD ${room.code}`;$('#alive-count').textContent=g.players.filter(x=>!x.bankrupt).length;
+  renderBoard();renderActions();renderPlayers();renderPortfolio();renderOffers();renderLog();renderChat();renderOffline();
+  document.title=g.turn===room.you&&!g.pending?'Twoja kolej! — Europoly':'Europoly — '+(player(g.turn)?.name||'ustalanie kolejności');
+  if(selectedField!==null&&$('#modal').open&&$('#modal-content .deed'))renderDeed(selectedField,false);
+  if(g.lastCard?.eventId!==lastCard){lastCard=g.lastCard?.eventId||null;if(g.lastCard){if(!$('#modal').open)showCard(g.lastCard);else toast(`${player(g.lastCard.playerId)?.name}: ${g.lastCard.text}`);}}
+  if(g.phase==='finished'&&!$('#modal-content .end-screen'))showEnd();
+}
+function renderBoard(){
+  const g=status();
+  for(const f of config.board){const el=$(`[data-field="${f.id}"]`),a=g.properties[f.id];if(!a)continue;const owner=player(a.ownerId);el.classList.toggle('mortgaged',a.mortgaged);const marker=el.querySelector('.owner');marker.classList.toggle('hidden',!owner);if(owner)marker.style.background=owner.color;el.querySelector('.buildings').textContent=a.buildings===5?'H':a.buildings?'⌂'.repeat(a.buildings):'';el.querySelector('.mortgage-icon').textContent=a.mortgaged?'⊘':'';el.title=`${f.name}${owner?' · '+owner.name:''}${a.mortgaged?' · zastawione':''}`;}
+  $('#center-game').innerHTML=`<div class="center-turn">${g.phase==='order'?'Najpierw ustalmy kolejność.':g.phase==='finished'?'Europa ma nowego właściciela.':g.phase==='paused'?'Czekamy na powrót graczy.':`Ruch gracza <strong>${esc(player(g.turn)?.name)}</strong>`}</div><div class="dice-tray ${g.diceId!==lastDice?'rolling':''}">${g.dice.map(d=>`<span class="die" aria-label="${d} oczek">${['','⚀','⚁','⚂','⚃','⚄','⚅'][d]}</span>`).join('')}</div><div class="bank-stock"><span>⌂ ${g.bank.houses} domów</span><span>▥ ${g.bank.hotels} hoteli</span></div>`;
+  if(g.diceId!==lastDice){if(lastDice)sound();lastDice=g.diceId;}
+  const movement=g.movement,newMove=movement&&movement.id!==lastMovement;lastMovement=movement?.id||null;
+  g.players.forEach((p,i)=>{
+    if(p.bankrupt){$(`#token-${p.id}`)?.remove();return;}
+    if(newMove&&movement.playerId===p.id&&tokenPositions.has(p.id)&&!movement.teleport&&!window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+      clearInterval(animationTimers.get(p.id));let step=0;const direction=movement.steps<0?-1:1;let pos=movement.from;renderToken(p,i,pos);
+      const timer=setInterval(()=>{step++;pos=(pos+direction+40)%40;renderToken(p,i,pos);if(step>=Math.abs(movement.steps)){clearInterval(timer);renderToken(p,i,p.pos);animationTimers.delete(p.id);}},100);animationTimers.set(p.id,timer);
+      if(!movement.steps){clearInterval(timer);animationTimers.delete(p.id);renderToken(p,i,p.pos);}
+    } else if(!animationTimers.has(p.id)||newMove&&movement.playerId===p.id&&movement.teleport){clearInterval(animationTimers.get(p.id));animationTimers.delete(p.id);renderToken(p,i,p.pos);}
+  });
+}
+function renderToken(p,index,pos){
+  let el=$(`#token-${p.id}`);if(!el){el=document.createElement('span');el.id=`token-${p.id}`;el.className='token';$('#tokens')?.append(el);}
+  el.style.background=p.color;el.classList.toggle('jailed',!!p.jail);el.title=p.name||'';
+  const [row,col]=grid(pos),unit=100/11.8;
+  const center=n=>n===1?.7*unit:n===11?11.1*unit:(1.4+(n-2)+.5)*unit;
+  el.style.left=(center(col)+((index%3)-1)*1.25)+'%';el.style.top=(center(row)+(index<3?.4:2.2))+'%';tokenPositions.set(p.id,pos);
+}
+function renderActions(){
+  const g=status(),p=me(),a=g.pending,active=g.turn===p.id;
+  let html='<div class="panel-label">NASTĘPNY RUCH <span>↗</span></div>';
+  $('#actions-panel').classList.toggle('debt-box',a?.kind==='debt');
+  if(g.phase==='finished'){html+='<div class="action-title">Koniec podróży</div>'+button('Zobacz wyniki','results',{},'','primary wide');}
+  else if(p.bankrupt){html+='<div class="action-title">Kibicujesz z boku</div><p class="action-description">Twoja rozgrywka dobiegła końca. Czat i podgląd planszy pozostają dostępne.</p>';}
+  else if(g.phase==='order') {
+    const group=g.orderGroups.find(x=>x.length>1)||[],allowed=group.includes(p.id)&&!Object.hasOwn(g.orderRolls,p.id);
+    html+='<div class="action-title">Kto zaczyna?</div><p class="action-description">Najwyższa suma zaczyna. Przy remisie rzucają ponownie tylko remisujący.</p><div class="order-list">'+group.map(id=>`${esc(player(id).name)}: <b>${g.orderRolls[id]??'czeka na rzut'}</b>`).join('<br>')+'</div><div style="height:12px"></div>'+button('Rzuć o kolejność ⚄','orderRoll',{},allowed?'':'Czekaj na pozostałych graczy.','primary wide');
+  } else if(a?.kind==='buy') {
+    html+=`<div class="action-title">${esc(field(a.field).name)}</div><p class="action-description">${a.playerId===p.id?'To miasto może być Twoje. Kup je albo rozpocznij aukcję dla całego stołu.':`${esc(player(a.playerId).name)} decyduje o zakupie.`}</p><div class="cash-large">${money(field(a.field).price)}</div><div class="actions">${button('Kup pole','buy',{},a.playerId!==p.id?'Decyduje inny gracz.':p.cash<field(a.field).price?'Za mało gotówki.':'','primary')}${button('Licytacja →','decline',{},a.playerId!==p.id?'Decyduje inny gracz.':'')}</div>`;
+  } else if(a?.kind==='auction') {
+    html+=`<div class="action-title">Aukcja: ${esc(field(a.field).name)}</div><div class="auction-price">${money(a.high||10)}</div><p class="small">${a.highId?'Prowadzi '+esc(player(a.highId).name):'Cena wywoławcza · wszyscy mogą licytować'}</p><div class="auction-timer"><span id="auction-bar"></span></div><div class="small" id="auction-clock"></div><div class="auction-bids">${[10,50,100].map(n=>button('+'+n+' €','bid',{amount:a.high+n},a.passed.includes(p.id)?'Spasowałeś.':a.highId===p.id?'Twoja oferta jest najwyższa.':p.cash<a.high+n?'Za mało gotówki.':'')).join('')}</div>${button(a.passed.includes(p.id)?'Spasowano':'Pas','pass',{},a.passed.includes(p.id)?'Już spasowałeś.':a.highId===p.id?'Najwyższa oferta jest wiążąca.':'','wide')}`;
+  } else if(a?.kind==='debt') {
+    html+=`<div class="action-title attention">${a.playerId===p.id?'Musisz zapłacić':esc(player(a.playerId).name)+' musi zapłacić'}</div><div class="cash-large attention">${money(a.amount)}</div><p class="action-description">${esc(a.reason)}. Wierzyciel: ${esc(a.creditorId?player(a.creditorId).name:'bank')}. ${a.playerId===p.id?'Sprzedaj budynki, zastaw pola lub zaproponuj wymianę. Po uzyskaniu gotówki zapłata nastąpi automatycznie.':'Czekamy na rozliczenie długu.'}</p>${a.playerId===p.id?button('Ogłoś bankructwo','bankrupt',{},p.liquidValue>=a.amount?'Masz jeszcze majątek umożliwiający spłatę.':'','danger wide'):''}`;
+  } else if(a?.kind==='mortgage') {
+    html+=`<div class="action-title">Przejęta hipoteka</div><p class="action-description">${esc(player(a.playerId).name)} przejmuje ${esc(field(a.field).name)}. Wybierz wykup lub same odsetki.</p><div class="actions">${button('Odsetki '+money(Math.ceil(field(a.field).mortgage/10)),'mortgageChoice',{redeem:'false'},a.playerId!==p.id?'Decyduje właściciel.':'')}${button('Wykup '+money(field(a.field).mortgage+Math.ceil(field(a.field).mortgage/10)),'mortgageChoice',{redeem:'true'},a.playerId!==p.id?'Decyduje właściciel.':'','primary')}</div>`;
+  } else {
+    const canRoll=active&&(g.phase==='roll'||g.extraRoll),canEnd=active&&g.phase==='end'&&!g.extraRoll;
+    html+=`<div class="action-title">${active?p.jail?'Czas opuścić więzienie.':g.extraRoll?'Dublet! Jeszcze raz.':g.phase==='roll'?'Twoja kolej.':'Dobry moment na decyzje.':'Ruch: '+esc(player(g.turn)?.name||'czekamy')}</div><p class="action-description">${active?p.jail?`Możesz zapłacić 50€, użyć karty lub próbować dubletu. Nieudane próby: ${p.jailAttempts}/3.`:canRoll?'Rzuć kośćmi i zobacz, dokąd zabierze Cię Europa.':'Zarządzaj majątkiem albo przekaż kości dalej.':'Możesz zarządzać majątkiem i handlować także poza swoją turą.'}</p><div class="actions">${button(p.jail?'Spróbuj dubletu ⚄':'Rzuć kośćmi ⚄','roll',{},canRoll?'':'Czekaj na swoją kolej lub zakończ turę.','primary span2')}${button('Zakończ turę →','end',{},canEnd?'':'Najpierw wykonaj wszystkie rzuty i akcje.','span2')}${p.jail?button('Zapłać 50 €','jailPay',{},active&&g.phase==='roll'?'':'Dostępne przed rzutem w swojej turze.')+button('Użyj karty','jailCard',{},!p.cards.length?'Nie masz karty.':active&&g.phase==='roll'?'':'Dostępne przed rzutem w swojej turze.') :''}</div>`;
+  }
+  if(g.lastCard)html+=`<button class="text-button wide" style="font-size:10px;margin-top:9px" data-action="lastCard">Ostatnia karta ↗</button>`;
+  $('#actions-panel').innerHTML=html;updateClock();
+}
+function renderPlayers(){const g=status();$('#players-panel').innerHTML='<div class="panel-label">PRZY STOLE <span>'+g.players.length+' GRACZY</span></div>'+g.players.map(p=>{const m=room.members.find(m=>m.id===p.id);return `<div class="player-row ${p.id===g.turn?'active':''} ${p.bankrupt?'out':''}"><span class="avatar" style="--color:${p.color}">${esc(p.name[0])}</span><div class="player-info"><strong>${esc(p.name)}${p.id===room.you?' · Ty':''}</strong><small>${p.bankrupt?'Bankrut':!m?.connected?'Poza siecią':p.jail?'W więzieniu':p.id===g.turn?'Teraz gra':'W grze'} · ${p.fields.length} pól</small></div><div class="player-money">${money(p.cash)}<small>Majątek ${money(p.wealth)}</small></div></div>`;}).join('');}
+function renderPortfolio(){const p=me(),g=status();$('#portfolio-panel').innerHTML=`<div class="panel-label">TWÓJ MAJĄTEK <span>♙</span></div><div class="cash-large">${money(p.cash)}</div><div class="portfolio-chips">${[...p.fields].sort((a,b)=>a-b).map(id=>`<button class="property-chip" style="--color:${config.groups[field(id).group]?.color||'#a5b6a0'}" data-deed="${id}">${esc(field(id).name)}${property(id).mortgaged?' ⊘':''}</button>`).join('')||'<p class="empty-note">Pierwsze miasto czeka na swojego właściciela.</p>'}</div><p class="small">Karty wyjścia z więzienia: ${p.cards.length}</p>${button('Zaproponuj wymianę ⇄','trade',{},p.bankrupt||g.phase==='order'||g.phase==='finished'?'Handel jest dostępny w trakcie gry.':'','wide')}${button('Poddaj się','confirmSurrender',{},p.bankrupt||g.phase==='order'||g.phase==='finished'?'Niedostępne.':'','text-button wide')}`;}
+function renderOffers(){const offers=status().trades;$('#offers-panel').innerHTML=offers.length?`<div class="panel"><div class="panel-label">PROPOZYCJE WYMIANY</div>${offers.map(t=>`<div class="offer"><p>${t.from===room.you?'Twoja oferta dla '+esc(player(t.to).name):'Oferta od '+esc(player(t.from).name)}</p>${button('Zobacz','viewOffer',{id:t.id})} ${button(t.from===room.you?'Wycofaj':'Odrzuć','tradeReject',{id:t.id})}</div>`).join('')}</div>`:'';}
+function renderLog(){const el=$('#log-entries');if(!el)return;el.innerHTML=status().log.slice(-60).map(e=>`<div class="log-entry"><time>${new Date(e.time).toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})}</time>${esc(e.text)}</div>`).join('');el.scrollTop=el.scrollHeight;}
+function renderChat(){const el=$('#chat-entries');if(!el)return;el.innerHTML=room.chat.map(m=>`<div class="chat-message"><strong style="color:${m.color}">${esc(m.name)}</strong><span>${esc(m.text)}</span></div>`).join('')||'<p class="empty-note">Tu zaczynają się negocjacje. Przywitaj się!</p>';el.scrollTop=el.scrollHeight;}
+function renderOffline(){const el=$('#offline-notices');if(!el)return;el.innerHTML=room.members.filter(m=>!m.connected&&!player(m.id)?.bankrupt).map(m=>`<div class="offline-notice">${esc(m.name)} stracił połączenie. ${m.timedOut?'Jego kolejne tury będą pomijane.':'Może wrócić do tej samej sesji po odświeżeniu strony.'}<span class="offline-count" data-until="${m.decisionAt||0}"></span>${m.decisionAt&&Date.now()+offset>=m.decisionAt?`<div>${button('Poczekaj kolejne 2 min','wait',{id:m.id})}${button('Oddaj majątek bankowi','confirmRemove',{id:m.id},'','danger')}</div>`:''}</div>`).join('');}
+function updateClock(){const a=status()?.pending;if(a?.kind==='auction'){const ms=Math.max(0,a.endsAt-(Date.now()+offset));if($('#auction-clock'))$('#auction-clock').textContent=`${Math.ceil(ms/1000)} s na kolejną ofertę`;if($('#auction-bar'))$('#auction-bar').style.width=Math.min(100,ms/200)+'%';}}
+function showModal(html){$('#modal-content').innerHTML=html;if(!$('#modal').open)$('#modal').showModal();}
+function closeModal(){$('#modal').close();selectedField=null;tradeDraft=null;}
+function deedReason(type,id){
+  const g=status(),p=me(),a=property(id),f=field(id);if(!g||!p)return 'Dołącz do gry, aby zarządzać majątkiem.';
+  if(p.bankrupt||g.phase==='order'||g.phase==='finished')return 'Zarządzanie majątkiem jest teraz niedostępne.';
+  if(a.ownerId!==p.id)return 'To nie jest Twoje pole.';
+  const all=group(id).map(property),reserved=g.pending?.kind==='auction'&&g.pending.highId===p.id?g.pending.high:0;
+  if(type==='build'){if(f.type!=='city')return 'Budować można tylko w mieście.';if(!full(p)(id))return 'Potrzebujesz kompletu bez hipotek.';if(a.buildings===5)return 'Jest już hotel.';if(a.buildings!==Math.min(...all.map(x=>x.buildings)))return 'Najpierw zabuduj pozostałe miasta równomiernie.';if(p.cash-reserved<f.houseCost)return 'Za mało wolnej gotówki.';if(a.buildings===4?!g.bank.hotels:!g.bank.houses)return 'Brak budynków w banku.';if(g.pending?.kind==='debt'&&g.pending.playerId===p.id)return 'Najpierw spłać dług.';}
+  if(type==='sell'){if(!a.buildings)return 'Nie ma budynku do sprzedania.';if(a.buildings!==Math.max(...all.map(x=>x.buildings)))return 'Zacznij od najbardziej zabudowanego miasta.';if(a.buildings===5&&g.bank.houses<4)return 'Brak 4 domów do zamiany hotelu.';}
+  if(type==='mortgage'){if(a.mortgaged)return 'Pole jest już zastawione.';if(all.some(x=>x.buildings))return 'Najpierw sprzedaj budynki z całej grupy.';}
+  if(type==='redeem'){if(!a.mortgaged)return 'Pole nie jest zastawione.';if(p.cash-reserved<f.mortgage+Math.ceil(f.mortgage/10))return 'Za mało wolnej gotówki.';if(g.pending?.kind==='debt'&&g.pending.playerId===p.id)return 'Najpierw spłać dług.';if(g.pending?.kind==='mortgage'&&g.pending.field===id)return 'Użyj okna rozliczenia hipoteki.';}
+  return '';
+}
+function renderDeed(id,open=true){
+  selectedField=id;const f=field(id),a=property(id),owner=player(a?.ownerId),color=config.groups[f.group]?.color||'#b5c3a3';
+  let content;
+  if(f.price===null){const info={start:'Otrzymujesz 200€ po przejściu lub zatrzymaniu się na START.',chest:'Dobierasz kartę z talii Kasy społecznej.',chance:'Dobierasz kartę z talii Szansy.',tax:`Płacisz ${f.amount}€ bankowi. Podatki nie zasilają Darmowego Parkingu.`,jail:'Przechodząc tędy, tylko odwiedzasz. Więźniowie mogą budować, handlować i pobierać czynsze.',parking:'Odpocznij. Nie otrzymujesz pieniędzy — bank nie odkłada tu podatków.',goToJail:'Przenieś się prosto do więzienia bez premii za START. Tura kończy się natychmiast.'};content=`<div class="card-event"><div class="card-symbol">${icons[f.type]}</div><h2>${esc(f.name)}</h2><p>${info[f.type]}</p></div>`;}
+  else {
+    const labels=f.type==='city'?['Czynsz bazowy','1 dom','2 domy','3 domy','4 domy','Hotel']:f.type==='station'?['1 dworzec','2 dworce','3 dworce','4 dworce']:['Jedno medium','Oba media'];
+    content=`<div class="deed"><div class="deed-title" style="--color:${color}"><small style="display:block;font:9px Arial;letter-spacing:2px;margin-bottom:8px">TYTUŁ WŁASNOŚCI</small>${esc(f.name)}</div><table class="rent-table"><tbody>${f.rents.map((rent,i)=>`<tr><td>${labels[i]}</td><td>${f.type==='utility'?rent+' × suma kości':money(rent)}</td></tr>`).join('')}<tr><td>Cena zakupu</td><td>${money(f.price)}</td></tr>${f.houseCost?`<tr><td>Dom / hotel</td><td>${money(f.houseCost)}</td></tr>`:''}<tr><td>Wartość zastawu</td><td>${money(f.mortgage)}</td></tr><tr><td>Wykup zastawu</td><td>${money(f.mortgage+Math.ceil(f.mortgage/10))}</td></tr></tbody></table><div class="deed-owner">Właściciel: <strong>${esc(owner?.name||'bank')}</strong>${a?.mortgaged?' · ZASTAWIONE':''}${a?.buildings?' · '+(a.buildings===5?'hotel':a.buildings+' domów'):''}</div>${f.type==='city'?'<p style="color:#53664e;font-size:10px;margin:12px 0 0">Komplet koloru bez hipotek: podwójny czynsz bazowy. Buduj i sprzedawaj równomiernie.</p>':''}</div>${status()?`<div class="deed-actions">${f.type==='city'?button('Buduj ⌂','build',{field:id},deedReason('build',id),'primary')+button('Sprzedaj budynek','sell',{field:id},deedReason('sell',id)):''}${button('Zastaw','mortgage',{field:id},deedReason('mortgage',id))}${button('Wykup','redeem',{field:id},deedReason('redeem',id))}</div>`:''}`;
+  }
+  if(open)showModal(content);else $('#modal-content').innerHTML=content;
+}
+function showCard(c){selectedField=null;showModal(`<div class="card-event"><div class="eyebrow">${esc(player(c.playerId)?.name)}</div><div class="card-symbol">${c.deck==='chance'?'?':'▣'}</div><h2>${c.deck==='chance'?'Szansa':'Kasa społeczna'}</h2><p>${esc(c.text)}</p><button class="primary" data-action="close">Wracamy do gry →</button></div>`);}
+function sideMarkup(p,name,selected={cash:0,fields:[],cards:[]}){return `<div class="trade-side"><h3>${name==='give'?'Ty oferujesz':'Otrzymujesz'} · ${esc(p.name)}</h3><label class="field-label" for="${name}-cash">GOTÓWKA (€)</label><input id="${name}-cash" name="${name}Cash" type="number" min="0" max="${p.cash}" step="1" value="${selected.cash||0}" required><div class="trade-list">${p.fields.map(id=>{const blocked=group(id).some(i=>property(i).buildings>0);return `<label class="check-row"><input type="checkbox" name="${name}Fields" value="${id}" ${selected.fields?.includes(id)?'checked':''} ${blocked?'disabled':''}><span>${esc(field(id).name)} ${property(id).mortgaged?'⊘':''}${blocked?' <small>(zabudowana grupa)</small>':''}</span></label>`;}).join('')}${p.cards.map(id=>`<label class="check-row"><input type="checkbox" name="${name}Cards" value="${id}" ${selected.cards?.includes(id)?'checked':''}><span>Karta wyjścia (${CARDDESC(id)})</span></label>`).join('')}</div></div>`;}
+const CARDDESC=id=>id.startsWith('chance')?'Szansa':'Kasa';
+function showTrade(targetId=null,prefill=null){
+  const p=me(),others=status().players.filter(x=>x.id!==p.id&&!x.bankrupt);if(!others.length)return;
+  const to=others.find(x=>x.id===targetId)||others[0];tradeDraft={to:to.id};selectedField=null;
+  showModal(`<div class="eyebrow">SZTUKA NEGOCJACJI</div><h2>Dobry interes dla obu stron.</h2><form id="trade-form"><label class="field-label" for="trade-target">Z KIM HANDLUJESZ?</label><select id="trade-target">${others.map(x=>`<option value="${x.id}" ${x.id===to.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select><div style="height:15px"></div><div class="trade-columns">${sideMarkup(p,'give',prefill?.give)}${sideMarkup(to,'take',prefill?.take)}</div><p class="small" style="margin:15px 0 5px">Przy przejęciu zastawionego pola płacisz 10% odsetek. Możesz też od razu spłacić hipotekę:</p>${to.fields.filter(id=>property(id).mortgaged).map(id=>`<label class="check-row"><input type="checkbox" name="redeemFields" value="${id}"><span>Wykup od razu: ${esc(field(id).name)} (${money(field(id).mortgage+Math.ceil(field(id).mortgage/10))})</span></label>`).join('')||'<span class="small">Partner nie ma zastawionych pól.</span>'}<div class="trade-submit"><button class="primary" type="submit">Wyślij propozycję →</button><button type="button" data-action="close">Anuluj</button></div></form>`);
+}
+function describeSide(side){return [money(side.cash),...side.fields.map(id=>esc(field(id).name)+(property(id).mortgaged?' (hipoteka)':'')),...side.cards.map(id=>'Karta wyjścia — '+CARDDESC(id))].join(' · ');}
+function showOffer(id){const t=status().trades.find(t=>t.id===id);if(!t){toast('Oferta nie jest już dostępna.',true);closeModal();return;}selectedField=null;
+  showModal(`<div class="eyebrow">OFERTA WYMIANY</div><h2>${esc(player(t.from).name)} ⇄ ${esc(player(t.to).name)}</h2><div class="trade-summary"><strong>${esc(player(t.from).name)} daje:</strong><br>${describeSide(t.give)}</div><div class="trade-summary"><strong>${esc(player(t.to).name)} daje:</strong><br>${describeSide(t.take)}</div>${t.to===room.you?`<form id="accept-form" data-id="${t.id}"><p class="small">Za przejęte hipoteki domyślnie płacisz 10% odsetek. Zaznacz pola, które chcesz od razu wykupić.</p>${t.give.fields.filter(id=>property(id).mortgaged).map(id=>`<label class="check-row"><input name="redeemFields" type="checkbox" value="${id}"><span>Wykup ${esc(field(id).name)} — ${money(field(id).mortgage+Math.ceil(field(id).mortgage/10))}</span></label>`).join('')}<div class="trade-submit"><button type="submit" class="primary">Akceptuję</button><button type="button" data-action="counter" data-id="${t.id}">Kontroferta</button><button type="button" data-action="rejectClose" data-id="${t.id}">Odrzuć</button></div></form>`:'<p class="small">Czekamy na odpowiedź drugiej strony. Wysyłając ofertę, zaakceptowałeś jej warunki.</p>'}`);
+}
+function showEnd(){const g=status(),p=player(g.winner);selectedField=null;showModal(`<div class="end-screen"><div class="eyebrow">EUROPA MA SWOJEGO ZWYCIĘZCĘ</div><div class="card-symbol">♛</div><h1>${esc(p?.name||'Koniec gry')}<br><em>${p?'wygrywa Europę.':'Dziękujemy za grę.'}</em></h1><div class="end-stats"><div><strong>${money(p?.wealth||0)}</strong><small>Majątek</small></div><div><strong>${p?.fields.length||0}</strong><small>Nieruchomości</small></div><div><strong>${Math.max(1,Math.round(((g.endedAt||Date.now())-g.startedAt)/60000))} min</strong><small>Czas gry</small></div></div>${button('Zagraj ponownie →','replay',{},room.you===room.hostId?'':'Powrót do lobby uruchamia gospodarz.','primary')}<p class="small" style="margin-top:15px">${room.you!==room.hostId?'Czekamy na gospodarza.':'Wracacie do lobby z tym samym kodem pokoju.'}</p></div>`);}
+function showHelp(){selectedField=null;showModal(`<div class="eyebrow">MAŁY PRZEWODNIK</div><h2>Wszystko zaczyna się od ruchu.</h2><ol class="help-list"><li><strong>Zaproś znajomych.</strong> Utwórz stół, podaj im adres gry i pięcioznakowy kod. Gra wymaga 2–6 osób.</li><li><strong>Rzuć i odkrywaj.</strong> Każdy startuje z 1500€. Przejście przez START daje 200€. Dublet pozwala rzucić ponownie; trzeci wysyła do więzienia.</li><li><strong>Kupuj lub licytuj.</strong> Odmowa zakupu uruchamia aukcję dla wszystkich. Oferta rezerwuje gotówkę, a pas wycofuje z tej aukcji.</li><li><strong>Zbuduj komplet.</strong> Kliknij własne miasto, aby budować, sprzedawać budynki lub zarządzać hipoteką. Buduj i sprzedawaj równomiernie. Bank ma 32 domy i 12 hoteli.</li><li><strong>Negocjuj.</strong> Handluj gotówką, niezabudowanymi grupami i kartami więziennymi także poza swoją turą. Wymiana wymaga zgody obu stron.</li><li><strong>Rozlicz długi.</strong> Czynsze pobierają się automatycznie. Gdy brakuje środków, sprzedaj budynki lub zastaw majątek. Dług blokuje dalszy ruch.</li><li><strong>Więzienie.</strong> Zapłać 50€, użyj karty lub spróbuj dubletu. Po trzeciej nieudanej próbie płacisz i wykonujesz ostatni rzut.</li><li><strong>Wygrywa ostatni gracz.</strong> Darmowy Parking nie daje pieniędzy. Sesja jest zapisywana w tej przeglądarce; odświeżenie pozwala wrócić.</li></ol><p class="small">Nieoficjalna gra inspirowana klasycznymi grami majątkowymi. Bez kont i płatności.</p>`);}
+document.addEventListener('click',async e=>{
+  const tile=e.target.closest('[data-field],[data-deed]');if(tile){renderDeed(Number(tile.dataset.field??tile.dataset.deed));return;}
+  const t=e.target.closest('[data-tab]');if(t){tab=t.dataset.tab;$('#log-view').classList.toggle('hidden',tab!=='log');$('#chat-view').classList.toggle('hidden',tab!=='chat');document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));return;}
+  if(e.target.closest('.modal-close')){closeModal();return;}
+  const b=e.target.closest('[data-action]');if(!b||b.disabled)return;
+  const a=b.dataset.action;
+  if(a==='close'){closeModal();return;}
+  if(a==='copy'){try{await navigator.clipboard.writeText(room.code);toast('Kod '+room.code+' skopiowany.');}catch{toast('Kod pokoju: '+room.code);}return;}
+  if(['color','start','kick','wait'].includes(a)){await roomAct(a,{id:b.dataset.id,color:b.dataset.color});return;}
+  if(a==='replay'){if(await roomAct('replay')){closeModal();lastDice=0;lastCard=null;lastMovement=null;}return;}
+  if(a==='trade'){showTrade();return;}
+  if(a==='viewOffer'){showOffer(b.dataset.id);return;}
+  if(a==='counter'){const offer=status().trades.find(t=>t.id===b.dataset.id);if(offer){await act('tradeReject',{id:offer.id});showTrade(offer.from,{give:offer.take,take:offer.give});}return;}
+  if(a==='rejectClose'){if(await act('tradeReject',{id:b.dataset.id}))closeModal();return;}
+  if(a==='lastCard'){showCard(status().lastCard);return;}
+  if(a==='results'){showEnd();return;}
+  if(a==='confirmSurrender'||a==='confirmRemove'||a==='bankrupt'){
+    const remove=a==='confirmRemove';showModal(`<h2>${remove?'Uznać gracza za bankruta?':a==='bankrupt'?'Ogłosić bankructwo?':'Zakończyć swoją grę?'}</h2><p>${remove?'Majątek nieobecnego gracza wróci do banku.':'Oddasz majątek wierzycielowi lub bankowi i będziesz obserwować dalszą rozgrywkę.'}</p><div class="trade-submit">${button('Potwierdzam',remove?'doRemove':a==='bankrupt'?'doBankrupt':'doSurrender',{id:b.dataset.id||''},'','danger')}${button('Wracam do gry','close')}</div>`);return;
+  }
+  if(a==='doRemove'){if(await roomAct('removeAbsent',{id:b.dataset.id}))closeModal();return;}
+  if(a==='doSurrender'||a==='doBankrupt'){if(await act(a==='doSurrender'?'surrender':'bankrupt')){closeModal();if(status().phase==='finished')showEnd();}return;}
+  const data={};if(b.dataset.field!==undefined)data.field=Number(b.dataset.field);if(b.dataset.amount!==undefined)data.amount=Number(b.dataset.amount);if(b.dataset.id)data.id=b.dataset.id;if(b.dataset.redeem!==undefined)data.redeem=b.dataset.redeem==='true';
+  b.disabled=true;await act(a,data);if(b.isConnected)b.disabled=false;
+});
+document.addEventListener('submit',async e=>{
+  const f=e.target;if(!['home-form','chat-form','trade-form','accept-form'].includes(f.id))return;e.preventDefault();
+  if(f.id==='home-form'){await enter('room:create');return;}
+  if(f.id==='chat-form'){const input=f.elements.message;if(await emit('chat:send',{text:input.value}))input.value='';return;}
+  const fd=new FormData(f);
+  if(f.id==='trade-form'){
+    const take={cash:Number(fd.get('takeCash')),fields:fd.getAll('takeFields').map(Number),cards:fd.getAll('takeCards')};
+    const data={to:tradeDraft.to,give:{cash:Number(fd.get('giveCash')),fields:fd.getAll('giveFields').map(Number),cards:fd.getAll('giveCards')},take,redeemFields:fd.getAll('redeemFields').map(Number).filter(id=>take.fields.includes(id))};
+    if(await act('tradeOffer',data)){closeModal();toast('Propozycja wysłana.');}
+  } else if(await act('tradeAccept',{id:f.dataset.id,redeemFields:fd.getAll('redeemFields').map(Number)})){closeModal();toast('Wymiana sfinalizowana.');}
+});
+document.addEventListener('change',e=>{if(e.target.id==='trade-target')showTrade(e.target.value);});
+document.addEventListener('click',async e=>{if(e.target.id==='join-toggle'){joinOpen=!joinOpen;$('#join-fields').classList.toggle('hidden',!joinOpen);if(joinOpen)$('#room-code').focus();}if(e.target.id==='join-submit')await enter('room:join');});
+document.addEventListener('keydown',e=>{if(e.target.id==='room-code'&&e.key==='Enter'){e.preventDefault();enter('room:join');}});
+async function enter(event){const name=$('#nickname').value.trim(),code=$('#room-code').value.trim().toUpperCase();if(!name){$('#nickname').reportValidity();return;}const r=await emit(event,{name,code});if(r){stored=r;localStorage.setItem('europoly-session',JSON.stringify(r));localStorage.setItem('europoly-name',name);}}
+$('#help').addEventListener('click',showHelp);$('#sound').addEventListener('click',()=>{muted=!muted;localStorage.setItem('europoly-muted',muted);$('#sound').textContent=muted?'♫':'♪';$('#sound').title=muted?'Włącz dźwięki':'Wycisz';$('#sound').setAttribute('aria-label',$('#sound').title);sound();});
+$('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){const r=$('#modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeModal();}});
+$('#modal').addEventListener('cancel',()=>{selectedField=null;tradeDraft=null;});
+socket.on('connect',async()=>{$('#connection').textContent='Połączono';$('#connection').classList.remove('offline');if(stored?.token){const r=await emit('room:resume',{code:stored.code,token:stored.token});if(!r){stored=null;room=null;localStorage.removeItem('europoly-session');renderHome();}}});
+socket.on('disconnect',()=>{$('#connection').textContent='Łączenie ponownie…';$('#connection').classList.add('offline');});
+socket.on('room:state',data=>{room=data;offset=data.serverTime-Date.now();if(!data.game){if(screen==='game')closeModal();renderLobby();}else renderGame();});
+function resetSession(message){stored=null;room=null;localStorage.removeItem('europoly-session');closeModal();renderHome();toast(message,true);}
+socket.on('room:kicked',d=>{resetSession(d.message);setTimeout(()=>socket.connect(),300);});
+socket.on('session:replaced',d=>{resetSession(d.message);});
+setInterval(()=>{updateClock();if(room?.game&&$('#offline-notices')&&room.members.some(m=>!m.connected))renderOffline();},500);
+fetch('/api/config').then(r=>{if(!r.ok)throw Error('Nie można pobrać planszy.');return r.json();}).then(data=>{config=data;renderHome();socket.connect();}).catch(e=>{$('#app').textContent=e.message;});
